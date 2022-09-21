@@ -21,6 +21,7 @@ import org.polyvariant.sad.ToDiffTreeVisitor
 import software.amazon.smithy.model.Model
 import software.amazon.smithy.model.shapes.ShapeId
 import weaver._
+import org.polyvariant.sad.Context
 
 object DiffTreeTests extends FunSuite {
 
@@ -51,15 +52,26 @@ object DiffTreeTests extends FunSuite {
 
     val scope = oldModel.expectShape(ShapeId.from(scopeShape))
 
-    val diff = scope.accept(new ToDiffTreeVisitor(oldModel, newModel))
+    val diff = scope
+      .accept(new ToDiffTreeVisitor(oldModel, newModel))
+      .run(Context(newModel.expectShape(ShapeId.from(scopeShape))))
 
     expect(diff == expected)
   }
 
+  test("member shape change: simple to simple") {
+    assertDiff("test#A$a")(
+      "structure A { @required a: String }",
+      "structure A { @required a: Integer }",
+    )(
+      DiffTree.TypeChange("string", "integer").inStruct("a")
+    )
+  }
+
   test("simple struct member change: only member and type is shown") {
     assertDiff("test#A")(
-      """structure A { @required a: String } """,
-      """structure A { @required a: Integer } """,
+      "structure A { @required a: String }",
+      "structure A { @required a: Integer }",
     )(
       DiffTree.TypeChange("string", "integer").inStruct("a")
     )
@@ -68,10 +80,46 @@ object DiffTreeTests extends FunSuite {
   test("nested field member change: both members are shown") {
     val structA = "structure A { @required a: B }\n"
     assertDiff("test#A")(
-      s"""$structA structure B { @required b: String } """,
-      s"""$structA structure B { @required b: Integer } """,
+      s"$structA structure B { @required b: String }",
+      s"$structA structure B { @required b: Integer }",
     )(
       DiffTree.TypeChange("string", "integer").inStruct("b").inStruct("a")
+    )
+  }
+
+  test("struct member change: struct B to struct C") {
+    assertDiff("test#A")(
+      "structure A { @required a: B }\n structure B { @required b: String } ",
+      "structure A { @required a: C }\n structure C { @required b: Integer } ",
+    )(
+      DiffTree.TypeChange("string", "integer").inStruct("b").inStruct("a")
+    )
+  }
+
+  test("service -> operation -> input -> member change") {
+    assertDiff("test#A")(
+      "service A { operations: [Op] }\n operation Op { input := { s: String } }",
+      "service A { operations: [Op] }\n operation Op { input := { s: Integer } }",
+    )(
+      DiffTree
+        .TypeChange("string", "integer")
+        .inStruct("s")
+        .inStruct("input")
+        .inStruct("test#Op")
+        .inStruct("operations")
+        .inStruct("test#A")
+    )
+  }
+  test("operation -> input -> member change") {
+    assertDiff("test#Op")(
+      "operation Op { input := { s: String } }",
+      "operation Op { input := { s: Integer } }",
+    )(
+      DiffTree
+        .TypeChange("string", "integer")
+        .inStruct("s")
+        .inStruct("input")
+        .inStruct("test#Op")
     )
   }
 }

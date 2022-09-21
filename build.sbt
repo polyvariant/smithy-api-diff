@@ -15,6 +15,7 @@ val compilerPlugins = List(
 val Scala213 = "2.13.8"
 
 ThisBuild / scalaVersion := Scala213
+ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec.temurin("11"))
 
 Global / onChangedBuildSource := ReloadOnSourceChanges
 

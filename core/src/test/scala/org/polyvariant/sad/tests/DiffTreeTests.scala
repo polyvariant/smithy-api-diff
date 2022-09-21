@@ -59,6 +59,15 @@ object DiffTreeTests extends FunSuite {
     expect(diff == expected)
   }
 
+  test("member shape change: simple to simple") {
+    assertDiff("test#A$a")(
+      "structure A { @required a: String }",
+      "structure A { @required a: Integer }",
+    )(
+      DiffTree.TypeChange("string", "integer").inStruct("a")
+    )
+  }
+
   test("simple struct member change: only member and type is shown") {
     assertDiff("test#A")(
       "structure A { @required a: String }",
@@ -84,6 +93,33 @@ object DiffTreeTests extends FunSuite {
       "structure A { @required a: C }\n structure C { @required b: Integer } ",
     )(
       DiffTree.TypeChange("string", "integer").inStruct("b").inStruct("a")
+    )
+  }
+
+  test("service -> operation -> input -> member change") {
+    assertDiff("test#A")(
+      "service A { operations: [Op] }\n operation Op { input := { s: String } }",
+      "service A { operations: [Op] }\n operation Op { input := { s: Integer } }",
+    )(
+      DiffTree
+        .TypeChange("string", "integer")
+        .inStruct("s")
+        .inStruct("input")
+        .inStruct("test#Op")
+        .inStruct("operations")
+        .inStruct("test#A")
+    )
+  }
+  test("operation -> input -> member change") {
+    assertDiff("test#Op")(
+      "operation Op { input := { s: String } }",
+      "operation Op { input := { s: Integer } }",
+    )(
+      DiffTree
+        .TypeChange("string", "integer")
+        .inStruct("s")
+        .inStruct("input")
+        .inStruct("test#Op")
     )
   }
 }

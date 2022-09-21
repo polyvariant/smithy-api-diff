@@ -177,43 +177,19 @@ class ToDiffTreeVisitor(oldModel: Model, newModel: Model)
         .asScala
         .head
 
-    f(shape).accept(this).down(f)
+    f(shape)
+      .accept(this)
+      .down(f)
   }
 
-  override def memberShape(shape: MemberShape): DiffCompiler =
-    ctx => {
+  override def memberShape(shape: MemberShape): DiffCompiler = {
+    def f(model: Model)(shape: MemberShape): Shape = shape.getTarget().resolved(model)
 
-      val target = shape.getTarget()
-      val newTarget = {
-        val newShape = ctx.correspondingShape.asMemberShape().get()
-
-        newShape.getTarget()
-      }
-
-      val targetShape = target.resolved(oldModel)
-      val newTargetShape = newTarget.resolved(newModel)
-
-      val inner =
-        if (newTarget != target) {
-          targetShape.accept(this).run(Context(newTargetShape))
-        } else {
-          target
-            .resolved(oldModel)
-            .accept(this)
-            .run(
-              Context(
-                correspondingShape = ctx
-                  .correspondingShape
-                  .asMemberShape()
-                  .get()
-                  .getTarget()
-                  .resolved(newModel)
-              )
-            )
-        }
-
-      StructChange(shape.getMemberName(), inner)
-    }
+    f(oldModel)(shape)
+      .accept(this)
+      .down(f(newModel))
+      .map(_.inStruct(shape.getMemberName()))
+  }
 
   override def serviceShape(shape: ServiceShape): DiffCompiler = {
 

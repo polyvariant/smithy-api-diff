@@ -91,22 +91,14 @@ object Main extends App {
       case Todo             => "todo"
     }
 
-  val sc = TypeChange("integer", "string")
-    .inStruct("size")
-    .inStruct("payload")
-    .inStruct("input")
-    .inStruct("demo#MyOp")
-    .inStruct("operations")
-    .inStruct("demo#MyService")
-
-  println("expected:")
-  println(renderDiffTree(sc, 0))
-
   val visitor = new ToDiffTreeVisitor(oldModel, newModel)
   oldModel.getServiceShapes().asScala.toList.foreach { service =>
-    println(service.accept(visitor) == sc)
-    println("actual:")
-    println(renderDiffTree(service.accept(visitor), 0))
+    val dt = service
+      .accept(visitor)
+      // todo: support removal of services
+      .run(Context(newModel.expectShape(service.getId())))
+
+    println(renderDiffTree(dt, depth = 0))
   }
 }
 
@@ -122,7 +114,16 @@ object DiffTree {
 }
 
 // operates on shapes of the old model, as they're the base for our diffs
-class ToDiffTreeVisitor(oldModel: Model, newModel: Model) extends ShapeVisitor.Default[DiffTree] {
+
+case class Context(correspondingShape: Shape)
+
+// never too many things called compilers
+trait DiffCompiler {
+  def run(ctx: Context): DiffTree
+}
+
+class ToDiffTreeVisitor(oldModel: Model, newModel: Model)
+  extends ShapeVisitor.Default[DiffCompiler] {
 
   import DiffTree._
 
@@ -132,75 +133,124 @@ class ToDiffTreeVisitor(oldModel: Model, newModel: Model) extends ShapeVisitor.D
 
   override def getDefault(
     shape: software.amazon.smithy.model.shapes.Shape
-  ) = TypeChange(
-    shape.getType().toString(),
-    newModel.expectShape(shape.getId()).getType().toString(),
-  )
-
-  override def operationShape(shape: OperationShape): DiffTree = StructChange(
-    shape.getId().toString(),
-    StructChange(
-      "input",
-      structureShape(
-        shape
-          .getInput()
-          .get() /* todo */
-          .resolved(oldModel)
-          .asStructureShape()
-          .get()
-      ),
-    ),
-  )
-
-  override def structureShape(shape: StructureShape): DiffTree = shape
-    .members()
-    .asScala
-    .head
-    .accept(this)
-
-  override def memberShape(shape: MemberShape): DiffTree = {
-
-    val target = shape.getTarget()
-    val newTarget = {
-      val newShape = shape.getId.resolved(newModel).asMemberShape().get()
-
-      newShape.getTarget()
-    }
-
-    val targetShape = target.resolved(oldModel)
-    val newTargetShape = newTarget.resolved(newModel)
-
-    val inner =
-      if (newTarget != target) {
-
-        if (
-          targetShape.getType().getCategory() == Category.SIMPLE &&
-          newTargetShape.getType().getCategory() == Category.SIMPLE
+  ): DiffCompiler =
+    ctx =>
+      if (
+        shape.getType().getCategory() == Category.SIMPLE &&
+        ctx.correspondingShape.getType().getCategory() == Category.SIMPLE
+      )
+        TypeChange(
+          shape.getType().toString(),
+          ctx.correspondingShape.getType().toString(),
         )
-          TypeChange(
-            targetShape.getType().toString(),
-            newTargetShape.getType().toString(),
+      else
+        ???
+
+  override def operationShape(shape: OperationShape): DiffCompiler =
+    ctx =>
+      StructChange(
+        shape.getId().toString(),
+        StructChange(
+          "input",
+          structureShape(
+            shape
+              .getInput()
+              .get() /* todo */
+              .resolved(oldModel)
+              .asStructureShape()
+              .get()
+          ).run(
+            Context(
+              ctx
+                .correspondingShape
+                .asOperationShape()
+                .get()
+                .getInput()
+                .get()
+                .resolved(newModel)
+            )
+          ),
+        ),
+      )
+
+  override def structureShape(shape: StructureShape): DiffCompiler =
+    ctx =>
+      shape
+        .members()
+        .asScala
+        .head
+        .accept(this)
+        .run(
+          Context(
+            correspondingShape = ctx
+              .correspondingShape
+              .asStructureShape()
+              .get()
+              .getMember(shape.members().asScala.head.getMemberName())
+              .get()
           )
-        else
-          ???
-      } else {
-        target.resolved(oldModel).accept(this)
+        )
+
+  override def memberShape(shape: MemberShape): DiffCompiler =
+    ctx => {
+
+      val target = shape.getTarget()
+      val newTarget = {
+        val newShape = ctx.correspondingShape.asMemberShape().get()
+
+        newShape.getTarget()
       }
 
-    StructChange(shape.getMemberName(), inner)
-  }
+      val targetShape = target.resolved(oldModel)
+      val newTargetShape = newTarget.resolved(newModel)
 
-  override def serviceShape(shape: ServiceShape): DiffTree = StructChange(
-    shape.getId().toString(),
-    StructChange(
-      "operations",
-      shape
-        .getAllOperations()
-        .asScala
-        .head /* todo */
-        .resolved(oldModel)
-        .accept(this),
-    ),
-  )
+      val inner =
+        if (newTarget != target) {
+          targetShape.accept(this).run(Context(newTargetShape))
+        } else {
+          target
+            .resolved(oldModel)
+            .accept(this)
+            .run(
+              Context(
+                correspondingShape = ctx
+                  .correspondingShape
+                  .asMemberShape()
+                  .get()
+                  .getTarget()
+                  .resolved(newModel)
+              )
+            )
+        }
+
+      StructChange(shape.getMemberName(), inner)
+    }
+
+  override def serviceShape(shape: ServiceShape): DiffCompiler =
+    ctx =>
+      StructChange(
+        shape.getId().toString(),
+        StructChange(
+          "operations",
+          shape
+            .getAllOperations()
+            .asScala
+            .head /* todo */
+            .resolved(oldModel)
+            .accept(this)
+            .run(
+              Context(
+                ctx
+                  .correspondingShape
+                  .asServiceShape()
+                  .get()
+                  .getOperations()
+                  .asScala
+                  .head
+                  .resolved(newModel)
+              )
+            ),
+        ),
+      )
 
 }

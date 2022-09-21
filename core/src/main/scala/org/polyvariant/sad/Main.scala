@@ -70,19 +70,12 @@ object Main extends App {
     def toScalaList: List[A] = s.collect(Collectors.toList()).asScala.toList
   }
 
-  sealed trait DiffTree extends Product with Serializable
-  case class StructChange(name: String, diff: DiffTree) extends DiffTree
-  case class TypeChange(before: String, after: String) extends DiffTree
-  case object Todo extends DiffTree
+  import DiffTree._
 
   implicit class StringColorOps(s: String) {
     def yellow: String = Console.YELLOW + s + Console.RESET
     def red: String = Console.RED + s + Console.RESET
     def green: String = Console.GREEN + s + Console.RESET
-  }
-
-  implicit class ShapeIDOps(id: ShapeId) {
-    def resolved(model: Model): Shape = model.expectShape(id)
   }
 
   def renderStructChange(sc: StructChange, depth: Int): String = {
@@ -98,114 +91,116 @@ object Main extends App {
       case Todo             => "todo"
     }
 
-  // operates on shapes of the old model, as they're the base for our diffs
-  val toDiffTreeVisitor =
-    new ShapeVisitor.Default[DiffTree] {
-
-      override def getDefault(
-        shape: software.amazon.smithy.model.shapes.Shape
-      ) = TypeChange(
-        shape.getType().toString(),
-        newModel.expectShape(shape.getId()).getType().toString(),
-      )
-
-      override def operationShape(shape: OperationShape): DiffTree = StructChange(
-        shape.getId().toString(),
-        StructChange(
-          "input",
-          structureShape(
-            shape
-              .getInput()
-              .get() /* todo */
-              .resolved(oldModel)
-              .asStructureShape()
-              .get()
-          ),
-        ),
-      )
-
-      override def structureShape(shape: StructureShape): DiffTree = shape
-        .members()
-        .asScala
-        .head
-        .accept(this)
-
-      override def memberShape(shape: MemberShape): DiffTree = {
-
-        val target = shape.getTarget()
-        val newTarget = {
-          val newShape = shape.getId.resolved(newModel).asMemberShape().get()
-
-          newShape.getTarget()
-        }
-
-        val targetShape = target.resolved(oldModel)
-        val newTargetShape = newTarget.resolved(newModel)
-
-        val inner =
-          if (newTarget != target) {
-
-            if (
-              targetShape.getType().getCategory() == Category.SIMPLE &&
-              newTargetShape.getType().getCategory() == Category.SIMPLE
-            )
-              TypeChange(
-                targetShape.getType().toString(),
-                newTargetShape.getType().toString(),
-              )
-            else
-              ???
-          } else {
-            target.resolved(oldModel).accept(this)
-          }
-
-        StructChange(shape.getMemberName(), inner)
-      }
-
-      override def serviceShape(shape: ServiceShape): DiffTree = StructChange(
-        shape.getId().toString(),
-        StructChange(
-          "operations",
-          shape
-            .getAllOperations()
-            .asScala
-            .head /* todo */
-            .resolved(oldModel)
-            .accept(this),
-        ),
-      )
-
-    }
-
-  val sc = StructChange(
-    "demo#MyService",
-    StructChange(
-      "operations",
-      StructChange(
-        "demo#MyOp",
-        StructChange(
-          "input",
-          StructChange(
-            "payload",
-            StructChange(
-              "size",
-              TypeChange(
-                "integer",
-                "string",
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-  )
+  val sc = TypeChange("integer", "string")
+    .inStruct("size")
+    .inStruct("payload")
+    .inStruct("input")
+    .inStruct("demo#MyOp")
+    .inStruct("operations")
+    .inStruct("demo#MyService")
 
   println("expected:")
   println(renderDiffTree(sc, 0))
 
+  val visitor = new ToDiffTreeVisitor(oldModel, newModel)
   oldModel.getServiceShapes().asScala.toList.foreach { service =>
-    println(service.accept(toDiffTreeVisitor) == sc)
+    println(service.accept(visitor) == sc)
     println("actual:")
-    println(renderDiffTree(service.accept(toDiffTreeVisitor), 0))
+    println(renderDiffTree(service.accept(visitor), 0))
   }
+}
+
+sealed trait DiffTree extends Product with Serializable {
+  def inStruct(name: String): DiffTree.StructChange = DiffTree.StructChange(name, this)
+}
+
+object DiffTree {
+  case class StructChange(name: String, diff: DiffTree) extends DiffTree
+  case class TypeChange(before: String, after: String) extends DiffTree
+  case object Todo extends DiffTree
+
+}
+
+// operates on shapes of the old model, as they're the base for our diffs
+class ToDiffTreeVisitor(oldModel: Model, newModel: Model) extends ShapeVisitor.Default[DiffTree] {
+
+  import DiffTree._
+
+  implicit class ShapeIDOps(id: ShapeId) {
+    def resolved(model: Model): Shape = model.expectShape(id)
+  }
+
+  override def getDefault(
+    shape: software.amazon.smithy.model.shapes.Shape
+  ) = TypeChange(
+    shape.getType().toString(),
+    newModel.expectShape(shape.getId()).getType().toString(),
+  )
+
+  override def operationShape(shape: OperationShape): DiffTree = StructChange(
+    shape.getId().toString(),
+    StructChange(
+      "input",
+      structureShape(
+        shape
+          .getInput()
+          .get() /* todo */
+          .resolved(oldModel)
+          .asStructureShape()
+          .get()
+      ),
+    ),
+  )
+
+  override def structureShape(shape: StructureShape): DiffTree = shape
+    .members()
+    .asScala
+    .head
+    .accept(this)
+
+  override def memberShape(shape: MemberShape): DiffTree = {
+
+    val target = shape.getTarget()
+    val newTarget = {
+      val newShape = shape.getId.resolved(newModel).asMemberShape().get()
+
+      newShape.getTarget()
+    }
+
+    val targetShape = target.resolved(oldModel)
+    val newTargetShape = newTarget.resolved(newModel)
+
+    val inner =
+      if (newTarget != target) {
+
+        if (
+          targetShape.getType().getCategory() == Category.SIMPLE &&
+          newTargetShape.getType().getCategory() == Category.SIMPLE
+        )
+          TypeChange(
+            targetShape.getType().toString(),
+            newTargetShape.getType().toString(),
+          )
+        else
+          ???
+      } else {
+        target.resolved(oldModel).accept(this)
+      }
+
+    StructChange(shape.getMemberName(), inner)
+  }
+
+  override def serviceShape(shape: ServiceShape): DiffTree = StructChange(
+    shape.getId().toString(),
+    StructChange(
+      "operations",
+      shape
+        .getAllOperations()
+        .asScala
+        .head /* todo */
+        .resolved(oldModel)
+        .accept(this),
+    ),
+  )
+
 }

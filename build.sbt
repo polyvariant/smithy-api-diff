@@ -33,6 +33,7 @@ val commonSettings = Seq(
 
 lazy val core = project
   .settings(
+    name := "smithy-api-diff",
     commonSettings,
     libraryDependencies ++= Seq(
       "software.amazon.smithy" % "smithy-model" % "1.24.0",
